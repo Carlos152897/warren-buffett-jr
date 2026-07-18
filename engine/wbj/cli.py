@@ -57,19 +57,29 @@ def _providers():
 
 
 def _annual_series(facts: dict, tags: list[str]) -> list[dict]:
-    """Extract annual (10-K FY) datapoints for the first tag that has data."""
+    """Extract annual (10-K FY) datapoints, merged across every candidate tag.
+
+    Companies sometimes switch which XBRL tag they report a concept under
+    partway through their filing history (e.g. an ASC 606 taxonomy change).
+    Stopping at "the first tag with any data" would silently freeze that
+    metric at whatever year the company stopped using the older tag, while
+    other metrics (tagged consistently) keep updating — producing mismatched
+    fiscal periods across metrics. Merging every tag's rows and deduplicating
+    by fiscal-year-end (preferring the most recently filed row for a given
+    end date) keeps the series current regardless of which tag a given year
+    was reported under.
+    """
     gaap = facts.get("facts", {}).get("us-gaap", {})
+    by_end: dict[str, dict] = {}
     for tag in tags:
         units = gaap.get(tag, {}).get("units", {})
         rows = units.get("USD") or units.get("shares") or []
         annual = [r for r in rows if r.get("form") == "10-K" and r.get("fp") == "FY"]
-        if annual:
-            # Deduplicate restatements: keep the latest filing per fiscal year end.
-            by_end: dict[str, dict] = {}
-            for r in sorted(annual, key=lambda r: r.get("filed", "")):
+        for r in sorted(annual, key=lambda r: r.get("filed", "")):
+            existing = by_end.get(r["end"])
+            if existing is None or r.get("filed", "") >= existing.get("filed", ""):
                 by_end[r["end"]] = r
-            return sorted(by_end.values(), key=lambda r: r["end"])
-    return []
+    return sorted(by_end.values(), key=lambda r: r["end"])
 
 
 def _latest(series: list[dict]) -> float | None:
