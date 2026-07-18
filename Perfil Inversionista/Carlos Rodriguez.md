@@ -1,7 +1,7 @@
-# Perfil de Inversionista — Victor Gonzalez
+# Perfil de Inversionista — Carlos Rodriguez
 
 ## 1. ¿Cuál es tu objetivo principal al invertir?
-Crecimiento de capital
+Crecimiento de capital, con unos 1000 dolares por mes
 
 ## 2. ¿En cuánto tiempo esperas alcanzar ese objetivo?
 3–5 años
@@ -34,7 +34,7 @@ Mayor probabilidad de éxito, mayor rendimiento potencial, y que me ayude a calc
 Mi expectativa es hacer entre $5,000–$10,000 mensuales, pero me gustaría que se vaya analizando el portafolio mientras sube para ajustarlo en base a los rendimientos.
 
 ## 12. ¿Capital disponible para la cuenta?
-$25,000 USD
+$1,000 USD
 
 ## 13. ¿Máximo % del capital por posición individual?
 30%–60%

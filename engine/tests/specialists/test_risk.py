@@ -425,7 +425,7 @@ def test_run_beta_not_scorable_empty_benchmark():
 def test_run_nvda_fixture_profile_fit_populated(nvda_packet):
     out = risk.run(nvda_packet, overlay={"position_size_pct": 0.45})
     assert out.profile_fit["within_position_cap"] is True
-    assert out.profile_fit["capital_usd"] == pytest.approx(25_000.0)
+    assert out.profile_fit["capital_usd"] == pytest.approx(1_000.0)
 
 
 def test_run_nvda_fixture_validation_tests_all_self_checks_pass(nvda_packet):

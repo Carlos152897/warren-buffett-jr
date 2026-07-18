@@ -11,10 +11,10 @@ Sources of truth (`Cerebro/05_risk_analysis/`):
 - `SCORING.md`: the six weighted dimensions and their per-dimension
   gate/cap column.
 - `OUTPUT_SCHEMA.md`: `RiskOutput`'s extension fields.
-- `Perfil Inversionista/Victor Gonzalez.md`: this is the only specialist
+- `Perfil Inversionista/Carlos Rodriguez.md`: this is the only specialist
   that reads the investor profile (per CLAUDE.md) -- `PROFILE` below is a
   literal, dated transcription of that file's position-sizing/horizon
-  facts (30-60% max position, 3-5 year horizon, $25,000 capital,
+  facts (30-60% max position, 3-5 year horizon, $1,000 capital,
   aggressive/speculative style), not re-parsed from markdown at runtime.
 
 ## Direction rule
@@ -156,7 +156,7 @@ assert sum(DIMENSION_MAX_POINTS.values()) == MAX_POINTS
 
 SOLVENCY_WARNING = "SOLVENCY_WARNING: Operating earnings do not provide a comfortable interest buffer."
 
-# `Perfil Inversionista/Victor Gonzalez.md`, transcribed 2026-07 (dated;
+# `Perfil Inversionista/Carlos Rodriguez.md`, transcribed 2026-07 (dated;
 # re-check the source file if the profile changes). Only risk.py reads
 # this file, per CLAUDE.md's orchestration notes.
 PROFILE: dict[str, Any] = {
@@ -164,7 +164,7 @@ PROFILE: dict[str, Any] = {
     "horizon_years": (3, 5),
     "max_loss_tolerance": "gt_10pct",
     "style": "aggressive_speculative",
-    "capital_usd": 25_000.0,
+    "capital_usd": 1_000.0,
     "max_position_pct": (0.30, 0.60),
     "geography": "us_only",
     "excludes": ("forex",),

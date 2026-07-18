@@ -23,7 +23,7 @@ Warrent Buffet Jr/
 │   ├── shared/                ← políticas de datos, fórmulas, scoring engine
 │   ├── special_sauces/        ← motores de valuación y niveles importantes
 │   └── examples/              ← ejemplos de input, output y reporte final
-├── Perfil Inversionista/      ← perfil de Victor Gonzalez (leer SIEMPRE antes de recomendar)
+├── Perfil Inversionista/      ← perfil de Carlos Rodriguez (leer SIEMPRE antes de recomendar)
 ├── Instrucciones/             ← instrucciones originales del agente (.pages)
 ├── API/                       ← claves de API (NUNCA leer en voz alta, NUNCA commitear)
 ├── Agente Principal/          ← workspace del orquestador
@@ -49,12 +49,12 @@ Warrent Buffet Jr/
 
 Notas de independencia:
 - **Valuation** trabaja con los datos financieros crudos del packet (los mismos que ve Financial Analysis), nunca con el score de Financial Analysis.
-- **Risk** es el único que además lee `Perfil Inversionista/Victor Gonzalez.md` — evalúa tanto el riesgo de la empresa como el fit con el perfil.
+- **Risk** es el único que además lee `Perfil Inversionista/Carlos Rodriguez.md` — evalúa tanto el riesgo de la empresa como el fit con el perfil.
 - **Visual** corre AL FINAL, después de congelar los 6 scores — solo ilustra, no analiza.
 
 4. **Agregación** — valida cada output contra su `OUTPUT_SCHEMA.md`, calcula puntos ponderados, aplica gates y overrides (`Cerebro/00_main_agent/SCORING_AND_GATES.md`), resuelve contradicciones (`CONTRADICTION_RESOLUTION.md`) y sintetiza niveles de precio (`PRICE_LEVEL_SYNTHESIS.md`).
 5. **Reporte final** — sigue `Cerebro/00_main_agent/FINAL_REPORT_SCHEMA.md` con apéndice de auditoría. Ejemplo en `Cerebro/examples/FINAL_REPORT_EXAMPLE.md`. Guárdalo en `Reportes/<TICKER>/<YYYY-MM-DD>/`.
-6. **Filtro por perfil** — cruza toda recomendación con `Perfil Inversionista/Victor Gonzalez.md`: crecimiento de capital, horizonte 3–5 años, agresivo/especulativo, acciones/ETF/opciones, solo EE.UU., sin forex, máx 30–60% por posición, capital $25,000. Prioriza probabilidad de éxito y puntos de entrada/salida (timing).
+6. **Filtro por perfil** — cruza toda recomendación con `Perfil Inversionista/Carlos Rodriguez.md`: crecimiento de capital, horizonte 3–5 años, agresivo/especulativo, acciones/ETF/opciones, solo EE.UU., sin forex, máx 30–60% por posición, capital $1,000. Prioriza probabilidad de éxito y puntos de entrada/salida (timing).
 7. **Capa visual** — lanza `visual-report` con los datos ya congelados para producir los gráficos del reporte según las reglas de visualización y los visuales definidos en `Referencias/`.
 
 ## Contenido obligatorio del reporte final
