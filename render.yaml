@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: warren-buffett-jr
+    env: python
+    plan: starter
+    buildCommand: pip install ./engine
+    startCommand: python engine/scripts/webapp.py
+    envVars:
+      - key: WBJ_DATA_DIR
+        value: /var/data
+      - key: FMP_API_KEY
+        sync: false
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: FRED_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: WBJ_WEB_PASSWORD
+        sync: false
+    disk:
+      name: wbj-data
+      mountPath: /var/data
+      sizeGB: 1

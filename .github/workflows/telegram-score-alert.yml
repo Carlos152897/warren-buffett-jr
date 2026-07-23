@@ -1,0 +1,26 @@
+name: Telegram Score Alert
+
+on:
+  schedule:
+    # 8:00 AM ET = 12:00 UTC (verano/EDT) o 13:00 UTC (invierno/EST).
+    - cron: "0 12 * * 1-5"
+    - cron: "0 13 * * 1-5"
+  workflow_dispatch: # botón "Run workflow" para probar manualmente
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install wbj engine
+        run: pip install -e ./engine
+      - name: Scan watchlist and alert on Telegram (score 8+)
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 scripts/telegram_score_alert.py

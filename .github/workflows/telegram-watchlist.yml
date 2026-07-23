@@ -1,0 +1,22 @@
+name: Telegram Watchlist Digest
+
+on:
+  schedule:
+    # 8:00 AM ET = 12:00 UTC (verano/EDT) o 13:00 UTC (invierno/EST).
+    - cron: "0 12 * * 1-5"
+    - cron: "0 13 * * 1-5"
+  workflow_dispatch: # botón "Run workflow" para probar manualmente
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Send Telegram watchlist digest
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WBJ_WEB_URL: ${{ secrets.WBJ_WEB_URL }}
+          WBJ_WEB_PASSWORD: ${{ secrets.WBJ_WEB_PASSWORD }}
+        run: python3 scripts/telegram_watchlist.py

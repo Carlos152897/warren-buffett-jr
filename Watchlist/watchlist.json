@@ -1,0 +1,62 @@
+[
+  {
+    "ticker": "FSLR",
+    "name": "First Solar, Inc."
+  },
+  {
+    "ticker": "APH",
+    "name": "Amphenol Corp /De/"
+  },
+  {
+    "ticker": "KLAC",
+    "name": "Kla Corp"
+  },
+  {
+    "ticker": "EXE",
+    "name": "Expand Energy Corp"
+  },
+  {
+    "ticker": "PLTR",
+    "name": "Palantir Technologies Inc."
+  },
+  {
+    "ticker": "UI",
+    "name": "Ubiquiti Inc."
+  },
+  {
+    "ticker": "SON",
+    "name": "Sonoco Products Co"
+  },
+  {
+    "ticker": "MRVL",
+    "name": "Marvell Technology, Inc."
+  },
+  {
+    "ticker": "EQT",
+    "name": "Eqt Corp"
+  },
+  {
+    "ticker": "SSRGF",
+    "name": "Ssr Mining Inc."
+  },
+  {
+    "ticker": "HALO",
+    "name": "Halozyme Therapeutics, Inc."
+  },
+  {
+    "ticker": "DUOL",
+    "name": "Duolingo, Inc."
+  },
+  {
+    "ticker": "VCTR",
+    "name": "Victory Capital Holdings, Inc."
+  },
+  {
+    "ticker": "DTM",
+    "name": "Dt Midstream, Inc."
+  },
+  {
+    "ticker": "LNG",
+    "name": "Cheniere Energy, Inc."
+  }
+]
