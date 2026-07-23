@@ -69,6 +69,11 @@ class Providers:
     edgar: Any
     finnhub: Any
     fred: Any
+    # SEC 13F bulk-dataset fallback for FMP's plan-restricted institutional-
+    # holders endpoint. Optional (defaults to None = fallback disabled) so
+    # every existing `Providers(fmp=..., edgar=..., finnhub=..., fred=...)`
+    # call site keeps working unchanged.
+    form13f: Any = None
 
 
 # --- canonical field mapping -------------------------------------------
@@ -305,8 +310,6 @@ def build_packet(ticker: str, providers: Providers, now: datetime) -> Packet:
     ohlcv_raw = fmp.ohlcv_daily(ticker) or []
     peers = fmp.peers(ticker) or []
     analyst_estimates = fmp.analyst_estimates(ticker) or []
-    insider_trades = fmp.insider_trades(ticker) or []
-    institutional_holders = fmp.institutional_holders(ticker) or []
     earnings_calendar = fmp.earnings_calendar(ticker) or []
 
     quote = finnhub.quote(ticker)
@@ -315,6 +318,29 @@ def build_packet(ticker: str, providers: Providers, now: datetime) -> Packet:
 
     cik = edgar.cik_for(ticker)
     companyfacts = edgar.companyfacts(cik) if cik is not None else {}
+
+    # FMP's insider-trading endpoint is plan-restricted (402) on some API
+    # keys and returns None (not []) when the request itself failed/was
+    # rejected — as opposed to a genuine "no insider activity" empty list.
+    # Only in that failure case do we fall back to SEC EDGAR Form 4 filings
+    # (free, no plan required) so insider buy/sell evidence isn't silently
+    # dropped just because the FMP plan lacks the endpoint.
+    fmp_insider_trades = fmp.insider_trades(ticker)
+    if fmp_insider_trades is None and cik is not None:
+        insider_trades = edgar.form4_transactions(cik, ticker) or []
+    else:
+        insider_trades = fmp_insider_trades or []
+
+    # Same failure-vs-empty distinction for FMP's 13F institutional-holders
+    # endpoint. Its free EDGAR fallback isn't per-company (13F is filed by
+    # the *holders*, not the issuer) so it needs the security's CUSIP from
+    # `profile` and a dedicated provider (`providers.form13f`, optional —
+    # None disables the fallback rather than erroring).
+    fmp_institutional_holders = fmp.institutional_holders(ticker)
+    if fmp_institutional_holders is None and providers.form13f is not None:
+        institutional_holders = providers.form13f.holders(profile.get("cusip"), ticker) or []
+    else:
+        institutional_holders = fmp_institutional_holders or []
 
     risk_free_rate = providers.fred.risk_free_rate()
 

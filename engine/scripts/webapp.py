@@ -8,7 +8,10 @@ on the reference screenshots in Referencias/.
 
 from __future__ import annotations
 
+import base64
 import json
+import os
+import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -25,9 +28,10 @@ from wbj.providers.edgar import (
 )
 from wbj.screener import screen as run_screen
 from wbj.brief import company_brief
-from wbj.targets import live_price, narrative, price_history, price_targets
+from wbj.targets import after_hours_price, live_price, narrative, price_history, price_targets
 
-PORT = 8765
+PORT = int(os.environ.get("PORT", 8765))
+WEB_PASSWORD = os.environ.get("WBJ_WEB_PASSWORD", "")
 _lock = threading.Lock()
 
 settings = load_settings()
@@ -85,6 +89,7 @@ def analyze(ticker: str) -> dict:
     result = _compute(packet)
     price = live_price(ticker, fmp_api_key=settings.fmp_api_key)
     targets = price_targets(packet, price)
+    targets["extended_hours"] = after_hours_price(ticker, fmp_api_key=settings.fmp_api_key)
     # Seed agent memory: every web analysis also records its prediction.
     save_prediction(settings.reports_dir, ticker, date.today(),
                     result["scorecard"], targets)
@@ -94,6 +99,48 @@ def analyze(ticker: str) -> dict:
     result["history"] = _history(packet)
     result["chart"] = price_history(ticker)
     return result
+
+
+WATCHLIST_PATH = settings.reports_dir.parent / "Watchlist" / "watchlist.json"
+PORTFOLIO_PATH = settings.reports_dir.parent / "Portafolio" / "portafolio.json"
+
+
+def _load_list(path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_list(path, items: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _with_quotes(items: list[dict]) -> list[dict]:
+    """Saved tickers plus a live price and 1-day change for each."""
+    out = []
+    for item in items:
+        ticker = item["ticker"]
+        price = live_price(ticker, fmp_api_key=settings.fmp_api_key)
+        hist = price_history(ticker)
+        change_pct = None
+        if price is not None and len(hist) >= 2 and hist[-2]["value"]:
+            change_pct = (price - hist[-2]["value"]) / hist[-2]["value"]
+        out.append({**item, "price": price, "change_pct": change_pct,
+                    "extended_hours": after_hours_price(ticker, fmp_api_key=settings.fmp_api_key)})
+    return out
+
+
+def refresh_watchlist_from_screener(limit: int = 15) -> list[dict]:
+    """Replace the watchlist with the current top screener picks (evidence-based,
+    same filters as 'Descubrir empresas': ventas $0.8B-$30B, margen > 8%, crecimiento > 5%)."""
+    rows = run_screen(limit=limit)
+    items = [{"ticker": r["ticker"], "name": r["name"]} for r in rows]
+    _save_list(WATCHLIST_PATH, items)
+    return items
 
 
 PAGE = """<!doctype html>
@@ -108,7 +155,23 @@ PAGE = """<!doctype html>
     --red-bg:#fdecec; --blue:#3b82f6; --blue-bg:#e8f1fe; }
   * { margin:0; box-sizing:border-box; }
   body { background:var(--page); color:var(--ink);
-    font-family:system-ui,-apple-system,"Segoe UI",sans-serif; padding:36px 20px 60px; }
+    font-family:system-ui,-apple-system,"Segoe UI",sans-serif; display:flex; min-height:100vh; }
+  .sidenav { flex:0 0 220px; width:220px; background:var(--card); border-right:1px solid var(--grid);
+    padding:24px 14px; display:flex; flex-direction:column; gap:6px; position:sticky; top:0;
+    align-self:flex-start; height:100vh; overflow-y:auto; }
+  .sidenav .brand2 { font-weight:800; font-size:15px; padding:0 10px 18px; letter-spacing:-.01em; }
+  .navbtn { display:flex; align-items:center; gap:12px; width:100%; text-align:left; font:inherit;
+    font-size:14px; font-weight:600; padding:11px 14px; border-radius:12px; border:0;
+    background:transparent; color:var(--ink2); cursor:pointer; }
+  .navbtn:hover { background:var(--grid); color:var(--ink); }
+  .navbtn.on { background:var(--purple-bg); color:var(--purple); }
+  .navbtn .ic { font-size:17px; }
+  .content { flex:1; min-width:0; padding:36px 20px 60px; }
+  @media (max-width:700px) {
+    .sidenav { flex-basis:72px; width:72px; padding:24px 8px; }
+    .sidenav .brand2, .navbtn span:last-child { display:none; }
+    .navbtn { justify-content:center; padding:11px; }
+  }
   .wrap { max-width:1040px; margin:0 auto; }
   .kicker { font-size:12px; letter-spacing:.14em; text-transform:uppercase;
     color:var(--muted); font-weight:600; margin-bottom:6px; }
@@ -323,7 +386,38 @@ PAGE = """<!doctype html>
     background:linear-gradient(90deg,var(--purple),var(--green)); transition:width .6s ease; }
   .loadpct { text-align:right; font-size:12.5px; color:var(--muted); margin-top:6px;
     font-variant-numeric:tabular-nums; font-weight:600; }
-</style></head><body><div class="app landing" id="app"><div class="wrap">
+  /* --- Watchlist: tablero oscuro de tickers --- */
+  .wl-card { background:#0e1113; color:#e8eaed; }
+  .wl-card h2 { color:#fff; } .wl-card .sub { color:#8b929c; }
+  .wl-list { margin-top:8px; }
+  .wl-item { display:flex; align-items:center; gap:14px; padding:16px 2px;
+    border-bottom:1px solid rgba(255,255,255,.08); cursor:pointer; }
+  .wl-item:last-child { border-bottom:none; }
+  .wl-item:hover { background:rgba(255,255,255,.03); }
+  .wl-item .wl-left { flex:1; min-width:0; }
+  .wl-item .wl-left .tk { font-weight:800; font-size:15px; color:#fff; letter-spacing:-.01em; }
+  .wl-item .wl-left .nm { font-size:12px; color:#8b929c; margin-top:3px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .wl-item .wl-right { text-align:right; }
+  .wl-item .wl-right .px { font-weight:800; font-size:15.5px; color:#fff;
+    font-variant-numeric:tabular-nums; }
+  .wl-item .wl-right .chg { font-size:12.5px; font-weight:700; margin-top:3px;
+    font-variant-numeric:tabular-nums; }
+  .wl-item .wl-right .chg.up { color:#26d07c; } .wl-item .wl-right .chg.down { color:#ff5a5f; }
+  .wl-item .wl-right .chg.flat { color:#8b929c; }
+  .wl-item .rmbtn2, .wl-item .buybtn { flex:0 0 auto; border:0; background:none; color:#5b6270;
+    font-size:16px; cursor:pointer; opacity:0; transition:opacity .15s; padding:2px 4px; line-height:1; }
+  .wl-item .rmbtn2 { font-size:19px; }
+  .wl-item:hover .rmbtn2, .wl-item:hover .buybtn { opacity:1; }
+</style></head><body>
+<nav class="sidenav">
+  <div class="brand2">📊 Warren Buffett Jr</div>
+  <button class="navbtn on" id="navSearch" data-view="search"><span class="ic">🔍</span><span>Buscador de acciones</span></button>
+  <button class="navbtn" id="navWatchlist" data-view="watchlist"><span class="ic">⭐</span><span>Watchlist de acciones</span></button>
+  <button class="navbtn" id="navPortfolio" data-view="portfolio"><span class="ic">💼</span><span>Portafolio de acciones</span></button>
+</nav>
+<div class="content">
+<div class="app landing" id="app"><div class="wrap">
   <header class="hero">
     <div class="kicker">Warren Buffett Jr · Motor de Análisis · SEC EDGAR en vivo</div>
     <h1 id="brand">Bienvenido a Warren Buffett Jr</h1>
@@ -353,6 +447,38 @@ PAGE = """<!doctype html>
   Los targets son rangos de referencia con supuestos declarados — clasificación de research,
   no es asesoría de inversión.</div>
 </div></div>
+<div class="wl-view" id="watchlistView" style="display:none"><div class="wrap">
+  <header class="hero">
+    <div class="kicker">Warren Buffett Jr · Tu lista</div>
+    <h1>Watchlist de acciones</h1>
+    <p class="subtitle">Candidatos del screener (SEC EDGAR) · se actualiza sola cada lunes</p>
+    <div class="topbar" style="margin-top:20px">
+      <div class="searchbox">
+        <input id="wlq" placeholder="Agregar ticker — ej. NFLX, DIS, KO…" autocomplete="off">
+        <div class="sugg" id="wlSugg"></div>
+      </div>
+      <button class="discover" id="wlRefreshBtn">🔄 Actualizar ahora</button>
+    </div>
+  </header>
+  <div id="wlStatus" style="margin:16px 2px;color:var(--ink2);font-size:14px"></div>
+  <div class="card wl-card" id="wlCard" style="margin-top:22px"></div>
+</div></div>
+<div class="wl-view" id="portfolioView" style="display:none"><div class="wrap">
+  <header class="hero">
+    <div class="kicker">Warren Buffett Jr · Lo que ya compraste</div>
+    <h1>Portafolio de acciones</h1>
+    <p class="subtitle">Se queda aquí hasta que marques que la vendiste</p>
+    <div class="topbar" style="margin-top:20px">
+      <div class="searchbox">
+        <input id="pfq" placeholder="Agregar ticker que ya compraste — ej. NFLX, DIS, KO…" autocomplete="off">
+        <div class="sugg" id="pfSugg"></div>
+      </div>
+    </div>
+  </header>
+  <div id="pfStatus" style="margin:16px 2px;color:var(--ink2);font-size:14px"></div>
+  <div class="card wl-card" id="pfCard" style="margin-top:22px"></div>
+</div></div>
+</div>
 <script>
 const q = document.getElementById('q'), sugg = document.getElementById('sugg'),
       status = document.getElementById('status'), grid = document.getElementById('grid'),
@@ -534,10 +660,13 @@ function targetHtml(d) {
   const marks = pts.map(p => `
     <span class="lb ${p.below ? 'below' : ''}" style="left:${pos(p.v)};color:${p.c}">${p.lb} $${p.v.toFixed(0)}</span>
     <span class="pt" style="left:${pos(p.v)};background:${p.c}"></span>`).join('');
+  const eh = t.extended_hours;
+  const ehTxt = eh ? `<div class="u" style="margin-top:2px">$${eh.price.toLocaleString('en-US', {minimumFractionDigits: 2})} ${eh.label}</div>` : '';
   return `<h2>Precio objetivo — ${t.horizon}</h2>
     <div class="sub">Escenarios con supuestos declarados (nunca una sola línea)</div>
     <div class="price-now"><span class="n">$${t.price.toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
-      <span class="u">precio actual · EPS $${t.eps} · P/E ${t.pe_now}x</span></div>
+      <span class="u">precio actual (cierre de sesión regular) · EPS $${t.eps} · P/E ${t.pe_now}x</span></div>
+    ${ehTxt}
     <div class="range"><div class="line"></div>${marks}</div>${rows}
     <div class="sub" style="margin-top:12px">${t.disclaimer}</div>`;
 }
@@ -697,13 +826,14 @@ function briefHtml(d) {
 }
 
 // --- Gráfica SVG propia (cero dependencias externas) ---------------------
-let tvData = [], tvTargets = null;
+let tvData = [], tvTargets = null, tvLive = null;
 const PERIODS = { '1M': 21, '3M': 63, '6M': 126, '1A': 9999 };
 
 function renderChart(d) {
   const el = document.getElementById('chartCard');
   tvData = d.chart || [];
   tvTargets = d.targets && d.targets.status === 'ok' ? d.targets : null;
+  tvLive = tvTargets && tvTargets.extended_hours ? tvTargets.extended_hours : null;
   if (!tvData.length) {
     el.innerHTML = `<h2>Gráfica y targets</h2>
       <div class="sub">Sin historial de precio disponible para ${d.ticker}.</div>`;
@@ -785,9 +915,10 @@ function setPeriod(p) {
     </svg>`;
 
   const first = slice[0].value, last = slice[slice.length - 1].value;
-  const chg = last - first, pct = chg / first * 100;
+  const displayPrice = tvLive ? tvLive.price : last;
+  const chg = displayPrice - first, pct = chg / first * 100;
   document.getElementById('chartHead').innerHTML = `
-    <span class="px">$${last.toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+    <span class="px">$${displayPrice.toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
     <span class="chg ${chg >= 0 ? 'up' : 'down'}">${chg >= 0 ? '+' : ''}$${Math.abs(chg).toFixed(2)}
       (${chg >= 0 ? '+' : ''}${pct.toFixed(2)}%)</span>
     <span class="rng">${p}</span>`;
@@ -861,10 +992,289 @@ async function run(t) {
     status.innerHTML = `No pude analizar <b>${t}</b>: ${err.message}`;
   }
 }
+
+// --- Menú lateral: Buscador de acciones / Watchlist / Portafolio ----------
+const navSearch = document.getElementById('navSearch'), navWatchlist = document.getElementById('navWatchlist'),
+      navPortfolio = document.getElementById('navPortfolio');
+const watchlistView = document.getElementById('watchlistView'), portfolioView = document.getElementById('portfolioView');
+
+function showPanel(name) {
+  navSearch.classList.toggle('on', name === 'search');
+  navWatchlist.classList.toggle('on', name === 'watchlist');
+  navPortfolio.classList.toggle('on', name === 'portfolio');
+  app.style.display = name === 'search' ? '' : 'none';
+  watchlistView.style.display = name === 'watchlist' ? '' : 'none';
+  portfolioView.style.display = name === 'portfolio' ? '' : 'none';
+  if (name === 'watchlist') loadWatchlist();
+  if (name === 'portfolio') loadPortfolio();
+}
+navSearch.addEventListener('click', () => showPanel('search'));
+navWatchlist.addEventListener('click', () => showPanel('watchlist'));
+navPortfolio.addEventListener('click', () => showPanel('portfolio'));
+
+document.getElementById('wlRefreshBtn').addEventListener('click', async () => {
+  const wlStatus = document.getElementById('wlStatus');
+  wlStatus.innerHTML = '<span class="spin"></span>Repitiendo el screener (puede tardar un poco)…';
+  try {
+    const r = await fetch('/api/watchlist/refresh', {method: 'POST'});
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+    await r.json();
+    await loadWatchlist();
+  } catch (err) {
+    wlStatus.textContent = 'No pude actualizar: ' + err.message;
+  }
+});
+
+const wlq = document.getElementById('wlq'), wlSugg = document.getElementById('wlSugg');
+let wlTimer = null;
+wlq.addEventListener('input', () => {
+  clearTimeout(wlTimer);
+  wlTimer = setTimeout(async () => {
+    const v = wlq.value.trim();
+    if (!v) { wlSugg.style.display = 'none'; return; }
+    const r = await fetch('/api/search?q=' + encodeURIComponent(v));
+    const items = await r.json();
+    wlSugg.innerHTML = items.map(i =>
+      `<button data-t="${i.ticker}"><b>${i.ticker}</b><span>${i.name}</span></button>`).join('');
+    wlSugg.style.display = items.length ? 'block' : 'none';
+  }, 180);
+});
+wlq.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const first = wlSugg.querySelector('button');
+    addToWatchlist(first ? first.dataset.t : wlq.value.trim().toUpperCase());
+  }
+});
+wlSugg.addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b) addToWatchlist(b.dataset.t);
+});
+
+async function addToWatchlist(t) {
+  if (!t) return;
+  wlq.value = ''; wlSugg.style.display = 'none';
+  const wlStatus = document.getElementById('wlStatus');
+  wlStatus.textContent = 'Agregando ' + t + '…';
+  try {
+    const r = await fetch('/api/watchlist', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ticker: t}),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+    await r.json();
+    await loadWatchlist();
+  } catch (err) {
+    wlStatus.textContent = 'No pude agregar ' + t + ': ' + err.message;
+  }
+}
+
+async function removeFromWatchlist(t) {
+  try {
+    const r = await fetch('/api/watchlist?ticker=' + encodeURIComponent(t), {method: 'DELETE'});
+    await r.json();
+    await loadWatchlist();
+  } catch (err) {
+    document.getElementById('wlStatus').textContent = 'No pude quitar ' + t + ': ' + err.message;
+  }
+}
+
+async function loadWatchlist() {
+  const wlStatus = document.getElementById('wlStatus');
+  wlStatus.innerHTML = '<span class="spin"></span>Actualizando precios…';
+  try {
+    const r = await fetch('/api/watchlist');
+    const items = await r.json();
+    wlStatus.textContent = '';
+    renderWatchlist(items);
+  } catch (err) {
+    wlStatus.textContent = 'No pude cargar la watchlist: ' + err.message;
+  }
+}
+
+function renderWatchlist(items) {
+  const wlCard = document.getElementById('wlCard');
+  if (!items.length) {
+    wlCard.innerHTML = '<h2>Tu watchlist esta vacia</h2>' +
+      '<div class="sub">Agrega un ticker arriba para empezar a seguirlo.</div>';
+    return;
+  }
+  const rows = items.map(it => {
+    const chg = it.change_pct;
+    const chgCls = typeof chg !== 'number' ? 'flat' : chg > 0 ? 'up' : chg < 0 ? 'down' : 'flat';
+    const chgTxt = typeof chg === 'number' ? `${chg >= 0 ? '+' : ''}${(chg * 100).toFixed(2)}%` : '—';
+    const price = it.price != null
+      ? '$' + it.price.toLocaleString('en-US', {minimumFractionDigits: 2}) : '—';
+    const eh = it.extended_hours;
+    const ehTxt = eh ? `<div class="chg flat" style="font-size:11px">$${eh.price.toLocaleString('en-US', {minimumFractionDigits: 2})} ${eh.label}</div>` : '';
+    return `<div class="wl-item" data-t="${it.ticker}">
+      <div class="wl-left"><div class="tk">${it.ticker}</div><div class="nm">${it.name || ''}</div></div>
+      <div class="wl-right"><div class="px">${price}</div><div class="chg ${chgCls}">${chgTxt}</div>${ehTxt}</div>
+      <button class="buybtn" data-buy="${it.ticker}" data-nm="${it.name || ''}" title="Marcar como comprada">🛒</button>
+      <button class="rmbtn2" data-rm="${it.ticker}" title="Quitar">×</button>
+    </div>`;
+  }).join('');
+  wlCard.innerHTML = `<h2>Tu watchlist</h2>
+    <div class="sub">${items.length} ticker${items.length === 1 ? '' : 's'} · toca uno para ver el análisis completo</div>
+    <div class="wl-list">${rows}</div>`;
+  wlCard.querySelectorAll('.wl-item').forEach(row => {
+    row.addEventListener('click', e => {
+      if (e.target.closest('.rmbtn2') || e.target.closest('.buybtn')) return;
+      showPanel('search'); run(row.dataset.t);
+    });
+  });
+  wlCard.querySelectorAll('.rmbtn2').forEach(btn => {
+    btn.addEventListener('click', e => { e.stopPropagation(); removeFromWatchlist(btn.dataset.rm); });
+  });
+  wlCard.querySelectorAll('.buybtn').forEach(btn => {
+    btn.addEventListener('click', e => { e.stopPropagation(); markAsBought(btn.dataset.buy); });
+  });
+}
+
+// --- Portafolio: lo que ya compraste, se queda hasta que lo vendas --------
+const pfq = document.getElementById('pfq'), pfSugg = document.getElementById('pfSugg');
+let pfTimer = null;
+pfq.addEventListener('input', () => {
+  clearTimeout(pfTimer);
+  pfTimer = setTimeout(async () => {
+    const v = pfq.value.trim();
+    if (!v) { pfSugg.style.display = 'none'; return; }
+    const r = await fetch('/api/search?q=' + encodeURIComponent(v));
+    const items = await r.json();
+    pfSugg.innerHTML = items.map(i =>
+      `<button data-t="${i.ticker}"><b>${i.ticker}</b><span>${i.name}</span></button>`).join('');
+    pfSugg.style.display = items.length ? 'block' : 'none';
+  }, 180);
+});
+pfq.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const first = pfSugg.querySelector('button');
+    addToPortfolio(first ? first.dataset.t : pfq.value.trim().toUpperCase());
+  }
+});
+pfSugg.addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b) addToPortfolio(b.dataset.t);
+});
+
+async function addToPortfolio(t) {
+  if (!t) return;
+  pfq.value = ''; pfSugg.style.display = 'none';
+  const pfStatus = document.getElementById('pfStatus');
+  pfStatus.textContent = 'Agregando ' + t + '…';
+  try {
+    const r = await fetch('/api/portfolio', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ticker: t}),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+    await r.json();
+    await loadPortfolio();
+  } catch (err) {
+    pfStatus.textContent = 'No pude agregar ' + t + ': ' + err.message;
+  }
+}
+
+async function markAsBought(t) {
+  const wlStatus = document.getElementById('wlStatus');
+  wlStatus.textContent = 'Moviendo ' + t + ' al portafolio…';
+  try {
+    const r = await fetch('/api/portfolio', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ticker: t}),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+    await r.json();
+    await fetch('/api/watchlist?ticker=' + encodeURIComponent(t), {method: 'DELETE'});
+    await loadWatchlist();
+  } catch (err) {
+    wlStatus.textContent = 'No pude mover ' + t + ' al portafolio: ' + err.message;
+  }
+}
+
+async function removeFromPortfolio(t) {
+  try {
+    const r = await fetch('/api/portfolio?ticker=' + encodeURIComponent(t), {method: 'DELETE'});
+    await r.json();
+    await loadPortfolio();
+  } catch (err) {
+    document.getElementById('pfStatus').textContent = 'No pude quitar ' + t + ': ' + err.message;
+  }
+}
+
+async function loadPortfolio() {
+  const pfStatus = document.getElementById('pfStatus');
+  pfStatus.innerHTML = '<span class="spin"></span>Actualizando precios…';
+  try {
+    const r = await fetch('/api/portfolio');
+    const items = await r.json();
+    pfStatus.textContent = '';
+    renderPortfolio(items);
+  } catch (err) {
+    pfStatus.textContent = 'No pude cargar el portafolio: ' + err.message;
+  }
+}
+
+function renderPortfolio(items) {
+  const pfCard = document.getElementById('pfCard');
+  if (!items.length) {
+    pfCard.innerHTML = '<h2>Aun no tienes nada comprado</h2>' +
+      '<div class="sub">Marca un ticker como comprada desde la watchlist, o agregalo aqui directamente.</div>';
+    return;
+  }
+  const rows = items.map(it => {
+    const chg = it.change_pct;
+    const chgCls = typeof chg !== 'number' ? 'flat' : chg > 0 ? 'up' : chg < 0 ? 'down' : 'flat';
+    const chgTxt = typeof chg === 'number' ? `${chg >= 0 ? '+' : ''}${(chg * 100).toFixed(2)}%` : '—';
+    const price = it.price != null
+      ? '$' + it.price.toLocaleString('en-US', {minimumFractionDigits: 2}) : '—';
+    const eh = it.extended_hours;
+    const ehTxt = eh ? `<div class="chg flat" style="font-size:11px">$${eh.price.toLocaleString('en-US', {minimumFractionDigits: 2})} ${eh.label}</div>` : '';
+    return `<div class="wl-item" data-t="${it.ticker}">
+      <div class="wl-left"><div class="tk">${it.ticker}</div><div class="nm">${it.name || ''}</div></div>
+      <div class="wl-right"><div class="px">${price}</div><div class="chg ${chgCls}">${chgTxt}</div>${ehTxt}</div>
+      <button class="rmbtn2" data-rm="${it.ticker}" title="Marcar como vendida">✓</button>
+    </div>`;
+  }).join('');
+  pfCard.innerHTML = `<h2>Tu portafolio</h2>
+    <div class="sub">${items.length} posici${items.length === 1 ? 'on' : 'ones'} · toca una para ver el análisis completo · ✓ para marcar vendida</div>
+    <div class="wl-list">${rows}</div>`;
+  pfCard.querySelectorAll('.wl-item').forEach(row => {
+    row.addEventListener('click', e => {
+      if (e.target.closest('.rmbtn2')) return;
+      showPanel('search'); run(row.dataset.t);
+    });
+  });
+  pfCard.querySelectorAll('.rmbtn2').forEach(btn => {
+    btn.addEventListener('click', e => { e.stopPropagation(); removeFromPortfolio(btn.dataset.rm); });
+  });
+}
 </script></body></html>"""
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _check_auth(self) -> bool:
+        if not WEB_PASSWORD:
+            return True
+        header = self.headers.get("Authorization", "")
+        if not header.startswith("Basic "):
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="wbj"')
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return False
+        try:
+            decoded = base64.b64decode(header[len("Basic "):]).decode()
+            _, _, password = decoded.partition(":")
+        except (ValueError, UnicodeDecodeError):
+            password = ""
+        if not secrets.compare_digest(password, WEB_PASSWORD):
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="wbj"')
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return False
+        return True
+
     def _json(self, obj: dict | list, code: int = 200) -> None:
         body = json.dumps(obj).encode()
         self.send_response(code)
@@ -874,6 +1284,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802 (stdlib API)
+        if not self._check_auth():
+            return
         url = urlparse(self.path)
         qs = parse_qs(url.query)
         if url.path == "/":
@@ -891,6 +1303,18 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(run_screen(limit=15))
             except Exception as e:
                 self._json({"error": str(e)}, 500)
+        elif url.path == "/api/watchlist":
+            try:
+                with _lock:
+                    self._json(_with_quotes(_load_list(WATCHLIST_PATH)))
+            except Exception as e:
+                self._json({"error": str(e)}, 500)
+        elif url.path == "/api/portfolio":
+            try:
+                with _lock:
+                    self._json(_with_quotes(_load_list(PORTFOLIO_PATH)))
+            except Exception as e:
+                self._json({"error": str(e)}, 500)
         elif url.path == "/api/analyze":
             ticker = qs.get("ticker", [""])[0].strip().upper()
             if not ticker:
@@ -906,10 +1330,73 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json({"error": "not found"}, 404)
 
+    def _add_ticker(self, path) -> None:
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            self._json({"error": "invalid body"}, 400)
+            return
+        ticker = str(payload.get("ticker", "")).strip().upper()
+        if not ticker:
+            self._json({"error": "missing ticker"}, 400)
+            return
+        items = _load_list(path)
+        if not any(i["ticker"] == ticker for i in items):
+            matches = search(ticker, limit=1)
+            name = matches[0]["name"] if matches and matches[0]["ticker"] == ticker else ""
+            items.append({"ticker": ticker, "name": name})
+            _save_list(path, items)
+        self._json(items)
+
+    def do_POST(self) -> None:  # noqa: N802 (stdlib API)
+        if not self._check_auth():
+            return
+        url = urlparse(self.path)
+        if url.path == "/api/watchlist":
+            self._add_ticker(WATCHLIST_PATH)
+        elif url.path == "/api/portfolio":
+            self._add_ticker(PORTFOLIO_PATH)
+        elif url.path == "/api/watchlist/refresh":
+            try:
+                with _lock:
+                    self._json(refresh_watchlist_from_screener())
+            except Exception as e:
+                self._json({"error": str(e)}, 500)
+        else:
+            self._json({"error": "not found"}, 404)
+
+    def do_DELETE(self) -> None:  # noqa: N802 (stdlib API)
+        if not self._check_auth():
+            return
+        url = urlparse(self.path)
+        qs = parse_qs(url.query)
+        if url.path == "/api/watchlist":
+            path = WATCHLIST_PATH
+        elif url.path == "/api/portfolio":
+            path = PORTFOLIO_PATH
+        else:
+            self._json({"error": "not found"}, 404)
+            return
+        ticker = qs.get("ticker", [""])[0].strip().upper()
+        items = [i for i in _load_list(path) if i["ticker"] != ticker]
+        _save_list(path, items)
+        self._json(items)
+
     def log_message(self, fmt: str, *args) -> None:
         print(f"[wbj] {self.address_string()} {fmt % args}")
 
 
 if __name__ == "__main__":
-    print(f"WBJ web app -> http://localhost:{PORT}")
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    import socket
+
+    lan_ip = "127.0.0.1"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            lan_ip = s.getsockname()[0]
+    except OSError:
+        pass
+    print(f"WBJ web app -> http://localhost:{PORT}  (en este PC)")
+    print(f"WBJ web app -> http://{lan_ip}:{PORT}  (desde tu celular, misma wifi)")
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

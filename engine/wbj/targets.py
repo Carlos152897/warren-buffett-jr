@@ -16,6 +16,7 @@ from __future__ import annotations
 import httpx
 
 _FMP_QUOTE_URL = "https://financialmodelingprep.com/stable/quote-short"
+_FMP_AFTERMARKET_URL = "https://financialmodelingprep.com/stable/aftermarket-trade"
 _YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{t}"
 _YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh) warren-buffett-jr"}
 
@@ -60,6 +61,38 @@ def live_price(
             return float(price) if isinstance(price, (int, float)) else None
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
             return None
+    finally:
+        if own:
+            client.close()
+
+
+def after_hours_price(
+    ticker: str,
+    fmp_api_key: str | None = None,
+    client: httpx.Client | None = None,
+) -> dict | None:
+    """Latest after-hours trade price from FMP (needs key; Yahoo's chart API
+    no longer exposes extended-hours fields without auth). For display only —
+    never used for scoring/targets, those stay anchored on the regular-session
+    price from live_price(). Returns None with no key, or when there's no
+    after-hours trade to show (regular session, or lookup failed)."""
+    if not fmp_api_key:
+        return None
+    own = client is None
+    client = client or httpx.Client(timeout=8.0)
+    try:
+        r = client.get(
+            _FMP_AFTERMARKET_URL,
+            params={"symbol": ticker.upper(), "apikey": fmp_api_key},
+        )
+        if r.status_code != 200:
+            return None
+        rows = r.json()
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0].get("price"), (int, float)):
+            return None
+        return {"price": float(rows[0]["price"]), "label": "después del cierre"}
+    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
+        return None
     finally:
         if own:
             client.close()

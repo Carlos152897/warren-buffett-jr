@@ -122,13 +122,20 @@ def _build_packet(ticker: str) -> dict:
         # Phase 1 quick FMP scoring: raw price/estimates only — every
         # indicator (SMA/momentum, multiples) is derived downstream in
         # quick.py. Missing sub-keys keep the dependent category N/S.
+        # fmp.insider_trades returns None when the request itself failed
+        # (e.g. a 402 plan-restriction), as opposed to a genuine empty list
+        # of insider activity — only in that failure case do we fall back
+        # to SEC EDGAR Form 4 filings (free, no plan required).
+        fmp_insiders = fmp.insider_trades(ticker)
+        insiders = fmp_insiders if fmp_insiders is not None else edgar.form4_transactions(cik, ticker)
+
         packet["market_data"] = {
             "price": prof0.get("price"),
             "market_cap": prof0.get("mktCap"),
             "ohlcv": fmp.ohlcv_daily(ticker, years=1, today=date.today()),
             "estimates": fmp.analyst_estimates(ticker),
             "earnings": fmp.earnings_calendar(ticker),
-            "insiders": fmp.insider_trades(ticker),
+            "insiders": insiders,
         }
     return packet
 

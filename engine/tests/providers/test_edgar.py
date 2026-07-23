@@ -284,3 +284,181 @@ def test_cik_for_and_companyfacts_use_distinct_cache_entries(tmp_path):
     # tickers map cached under a fixed global key regardless of ticker
     assert cache.get("_GLOBAL", "tickers") == _load_fixture("tickers_sample")
     assert cache.get("CIK0001045810", "companyfacts") == _load_fixture("companyfacts_sample")
+
+
+# --- form4_filings -----------------------------------------------------------
+
+_SUBMISSIONS_WITH_FORM4 = {
+    "filings": {
+        "recent": {
+            "form": ["10-K", "4", "4"],
+            "accessionNumber": [
+                "0001045810-25-000023",
+                "0001197647-26-000005",
+                "0001197647-26-000001",
+            ],
+            "filingDate": ["2025-02-26", "2026-07-06", "2026-01-02"],
+            "acceptanceDateTime": [
+                "2025-02-26T20:15:00.000Z",
+                "2026-07-06T18:00:00.000Z",
+                "2026-01-02T18:00:00.000Z",
+            ],
+            "primaryDocument": [
+                "nvda-10k.htm",
+                "xslF345X06/wk-form4_1.xml",
+                "xslF345X06/wk-form4_2.xml",
+            ],
+        }
+    }
+}
+
+_FORM4_XML = """<?xml version="1.0"?>
+<ownershipDocument>
+    <reportingOwner>
+        <reportingOwnerId><rptOwnerName>DOE JANE</rptOwnerName></reportingOwnerId>
+    </reportingOwner>
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <transactionDate><value>2026-07-01</value></transactionDate>
+            <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+            <transactionAmounts>
+                <transactionShares><value>10000</value></transactionShares>
+                <transactionPricePerShare><value>150.5</value></transactionPricePerShare>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction><value>90000</value></sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+        </nonDerivativeTransaction>
+    </nonDerivativeTable>
+</ownershipDocument>"""
+
+
+def _routed_handler(submissions=None, xml_by_path=None):
+    submissions = submissions or _SUBMISSIONS_WITH_FORM4
+    xml_by_path = xml_by_path or {}
+
+    def handler(request):
+        if "submissions" in request.url.path:
+            return httpx.Response(200, json=submissions)
+        for path, xml in xml_by_path.items():
+            if path in str(request.url):
+                return httpx.Response(200, text=xml)
+        return httpx.Response(404, text="not found")
+
+    return handler
+
+
+def test_form4_filings_filters_to_form_4_only_newest_first(tmp_path):
+    p = _make_provider(tmp_path, _routed_handler())
+
+    filings = p.form4_filings(1045810)
+
+    assert [f["accessionNumber"] for f in filings] == [
+        "0001197647-26-000005",
+        "0001197647-26-000001",
+    ]
+
+
+def test_form4_filings_respects_limit(tmp_path):
+    p = _make_provider(tmp_path, _routed_handler())
+
+    filings = p.form4_filings(1045810, limit=1)
+
+    assert len(filings) == 1
+    assert filings[0]["accessionNumber"] == "0001197647-26-000005"
+
+
+def test_form4_filings_sends_user_agent(tmp_path):
+    captured = {}
+
+    def handler(request):
+        captured.setdefault("requests", []).append(request)
+        return httpx.Response(200, json=_SUBMISSIONS_WITH_FORM4)
+
+    p = _make_provider(tmp_path, handler)
+    p.form4_filings(1045810)
+
+    assert captured["requests"][0].headers.get("user-agent") == EDGAR_USER_AGENT
+
+
+# --- form4_transactions -------------------------------------------------------
+
+
+def test_form4_transactions_parses_open_market_sale(tmp_path):
+    handler = _routed_handler(
+        submissions={
+            "filings": {
+                "recent": {
+                    "form": ["4"],
+                    "accessionNumber": ["0001197647-26-000005"],
+                    "filingDate": ["2026-07-06"],
+                    "acceptanceDateTime": ["2026-07-06T18:00:00.000Z"],
+                    "primaryDocument": ["xslF345X06/wk-form4_1.xml"],
+                }
+            }
+        },
+        xml_by_path={"wk-form4_1.xml": _FORM4_XML},
+    )
+    p = _make_provider(tmp_path, handler)
+
+    rows = p.form4_transactions(1045810, "NVDA")
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["symbol"] == "NVDA"
+    assert row["reportingName"] == "DOE JANE"
+    assert row["transactionType"] == "S-Sale"
+    assert row["securitiesTransacted"] == 10000
+    assert row["price"] == 150.5
+    assert row["securitiesOwned"] == 90000
+    assert row["transactionDate"] == "2026-07-01"
+    assert row["formType"] == "4"
+    assert row["source"] == "SEC_EDGAR"
+
+
+def test_form4_transactions_caches_xml_and_does_not_refetch(tmp_path):
+    calls = {"xml": 0}
+
+    def handler(request):
+        if "submissions" in request.url.path:
+            return httpx.Response(200, json=_SUBMISSIONS_WITH_FORM4)
+        calls["xml"] += 1
+        return httpx.Response(200, text=_FORM4_XML)
+
+    p = _make_provider(tmp_path, handler)
+
+    p.form4_transactions(1045810, "NVDA")
+    p.form4_transactions(1045810, "NVDA")
+
+    assert calls["xml"] == 2  # one fetch per distinct Form 4 filing found (2 filings), not per call
+
+
+def test_form4_transactions_skips_filing_on_xml_fetch_failure(tmp_path):
+    def handler(request):
+        if "submissions" in request.url.path:
+            return httpx.Response(200, json=_SUBMISSIONS_WITH_FORM4)
+        return httpx.Response(500, text="server error")
+
+    p = _make_provider(tmp_path, handler)
+
+    assert p.form4_transactions(1045810, "NVDA") == []
+
+
+def test_form4_transactions_malformed_xml_returns_empty_for_that_filing(tmp_path):
+    handler = _routed_handler(
+        submissions={
+            "filings": {
+                "recent": {
+                    "form": ["4"],
+                    "accessionNumber": ["0001197647-26-000005"],
+                    "filingDate": ["2026-07-06"],
+                    "acceptanceDateTime": ["2026-07-06T18:00:00.000Z"],
+                    "primaryDocument": ["xslF345X06/wk-form4_1.xml"],
+                }
+            }
+        },
+        xml_by_path={"wk-form4_1.xml": "<not><valid xml"},
+    )
+    p = _make_provider(tmp_path, handler)
+
+    assert p.form4_transactions(1045810, "NVDA") == []
