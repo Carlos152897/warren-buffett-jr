@@ -26,6 +26,7 @@ from wbj.providers.edgar import (
     TICKERS_URL,
     EdgarProvider,
 )
+from wbj.providers.fmp import FMPProvider
 from wbj.screener import screen as run_screen
 from wbj.brief import company_brief
 from wbj.targets import after_hours_price, live_price, narrative, price_history, price_targets
@@ -36,6 +37,16 @@ _lock = threading.Lock()
 
 settings = load_settings()
 edgar = EdgarProvider(settings, Cache(settings.cache_dir))
+fmp = FMPProvider(settings, Cache(settings.cache_dir))
+
+
+def logo_for(ticker: str) -> str | None:
+    """Company logo URL from FMP's profile (7-day disk cache) — None if
+    unavailable rather than a guessed/broken URL."""
+    profile = fmp.profile(ticker)
+    prof0 = (profile[0] if isinstance(profile, list) and profile
+             else profile if isinstance(profile, dict) else {})
+    return prof0.get("image")
 
 
 def ticker_map() -> list[dict]:
@@ -134,7 +145,8 @@ def _with_quotes(items: list[dict]) -> list[dict]:
         if price is not None and len(hist) >= 2 and hist[-2]["value"]:
             change_pct = (price - hist[-2]["value"]) / hist[-2]["value"]
         out.append({**item, "price": price, "change_pct": change_pct,
-                    "extended_hours": after_hours_price(ticker, fmp_api_key=settings.fmp_api_key)})
+                    "extended_hours": after_hours_price(ticker, fmp_api_key=settings.fmp_api_key),
+                    "logo_url": logo_for(ticker)})
     return out
 
 
@@ -401,7 +413,9 @@ PAGE = """<!doctype html>
     border-bottom:1px solid rgba(255,255,255,.08); cursor:pointer; }
   .wl-item:last-child { border-bottom:none; }
   .wl-item:hover { background:rgba(255,255,255,.03); }
-  .wl-item .wl-left { flex:1; min-width:0; }
+  .wl-item .wl-left { flex:1; min-width:0; display:flex; align-items:center; gap:12px; }
+  .wl-logo { width:30px; height:30px; border-radius:9px; object-fit:contain;
+    background:#fff; border:1px solid rgba(255,255,255,.08); padding:3px; flex:0 0 auto; }
   .wl-item .wl-left .tk { font-weight:800; font-size:15px; color:#fff; letter-spacing:-.01em; }
   .wl-item .wl-left .nm { font-size:12px; color:#8b929c; margin-top:3px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -1115,8 +1129,10 @@ function renderWatchlist(items) {
       ? '$' + it.price.toLocaleString('en-US', {minimumFractionDigits: 2}) : '—';
     const eh = it.extended_hours;
     const ehTxt = eh ? `<div class="chg flat" style="font-size:11px">$${eh.price.toLocaleString('en-US', {minimumFractionDigits: 2})} ${eh.label}</div>` : '';
+    const logo = it.logo_url
+      ? `<img class="wl-logo" src="${it.logo_url}" alt="" onerror="this.remove()">` : '';
     return `<div class="wl-item" data-t="${it.ticker}">
-      <div class="wl-left"><div class="tk">${it.ticker}</div><div class="nm">${it.name || ''}</div></div>
+      <div class="wl-left">${logo}<div><div class="tk">${it.ticker}</div><div class="nm">${it.name || ''}</div></div></div>
       <div class="wl-right"><div class="px">${price}</div><div class="chg ${chgCls}">${chgTxt}</div>${ehTxt}</div>
       <button class="buybtn" data-buy="${it.ticker}" data-nm="${it.name || ''}" title="Marcar como comprada">🛒</button>
       <button class="rmbtn2" data-rm="${it.ticker}" title="Quitar">×</button>
@@ -1238,8 +1254,10 @@ function renderPortfolio(items) {
       ? '$' + it.price.toLocaleString('en-US', {minimumFractionDigits: 2}) : '—';
     const eh = it.extended_hours;
     const ehTxt = eh ? `<div class="chg flat" style="font-size:11px">$${eh.price.toLocaleString('en-US', {minimumFractionDigits: 2})} ${eh.label}</div>` : '';
+    const logo = it.logo_url
+      ? `<img class="wl-logo" src="${it.logo_url}" alt="" onerror="this.remove()">` : '';
     return `<div class="wl-item" data-t="${it.ticker}">
-      <div class="wl-left"><div class="tk">${it.ticker}</div><div class="nm">${it.name || ''}</div></div>
+      <div class="wl-left">${logo}<div><div class="tk">${it.ticker}</div><div class="nm">${it.name || ''}</div></div></div>
       <div class="wl-right"><div class="px">${price}</div><div class="chg ${chgCls}">${chgTxt}</div>${ehTxt}</div>
       <button class="rmbtn2" data-rm="${it.ticker}" title="Marcar como vendida">✓</button>
     </div>`;
