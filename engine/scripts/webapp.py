@@ -87,6 +87,10 @@ def analyze(ticker: str) -> dict:
 
     packet = _build_packet(ticker)
     result = _compute(packet)
+    profile = packet.get("fmp_profile")
+    prof0 = (profile[0] if isinstance(profile, list) and profile
+             else profile if isinstance(profile, dict) else {})
+    result["logo_url"] = prof0.get("image")
     price = live_price(ticker, fmp_api_key=settings.fmp_api_key)
     targets = price_targets(packet, price)
     targets["extended_hours"] = after_hours_price(ticker, fmp_api_key=settings.fmp_api_key)
@@ -289,6 +293,9 @@ PAGE = """<!doctype html>
   .tglegend i { width:18px; border-top:2px dashed; display:inline-block; }
   .card h2 { font-size:16px; font-weight:700; }
   .card .sub { color:var(--muted); font-size:12.5px; margin-top:3px; }
+  .entity-row { display:flex; align-items:center; gap:10px; }
+  .entity-logo { width:32px; height:32px; border-radius:9px; object-fit:contain;
+    background:#fff; border:1px solid var(--grid); padding:3px; flex:0 0 auto; }
   .hero-num { display:flex; align-items:baseline; gap:12px; margin:16px 0 4px; }
   .hero-num .n { font-size:38px; font-weight:800; letter-spacing:-.03em; }
   .hero-num .u { font-size:13px; color:var(--ink2); }
@@ -587,7 +594,9 @@ function heroHtml(d) {
       <div class="stick" data-h="${(r.revenue / maxRev * 100).toFixed(0)}" style="height:4%"></div>
       <span class="y">${r.year}</span>
     </div>`).join('');
-  return `<h2>${d.entity} · ${d.ticker}</h2>
+  const logo = d.logo_url
+    ? `<img class="entity-logo" src="${d.logo_url}" alt="" onerror="this.remove()">` : '';
+  return `<div class="entity-row">${logo}<h2>${d.entity} · ${d.ticker}</h2></div>
     <div class="sub">Año fiscal terminado ${d.fiscal_year_end} · Form 10-K · SEC EDGAR</div>
     <div class="hero-num"><span class="n">${fmtB(last.revenue)}</span>
       <span class="u">ventas anuales</span>${chip}</div>
