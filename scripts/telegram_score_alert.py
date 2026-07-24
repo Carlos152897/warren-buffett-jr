@@ -98,6 +98,8 @@ def fair_value_now(ticker: str) -> dict:
             "available": False,
             "reason": "DCF no calculable (datos insuficientes -- ver assumptions)",
             "assumptions": result.assumptions,
+            "company_name": packet.security.company_name,
+            "logo_url": packet.security.logo_url,
         }
     return {
         "available": True,
@@ -111,46 +113,77 @@ def fair_value_now(ticker: str) -> dict:
         ),
         "verdict": result.verdict,
         "assumptions": result.assumptions,
+        "company_name": packet.security.company_name,
+        "logo_url": packet.security.logo_url,
     }
 
 
-def build_message(hits: list[dict]) -> str | None:
+def build_intro(hits: list[dict]) -> str | None:
     if not hits:
         return None
-    lines = ["🚀 Warren Buffett Jr — Oportunidades de hoy (score 8+)"]
-    for h in hits:
+    return (
+        "🚀 *Warren Buffett Jr* — Oportunidades de hoy (score 8+)\n"
+        "Clasificación de research — no es recomendación de compra/venta."
+    )
+
+
+def build_hit_caption(h: dict) -> str:
+    fv = h.get("fair_value")
+    name = fv.get("company_name") if fv else None
+    header = f"*{h['ticker']}* — {name}" if name else f"*{h['ticker']}*"
+    lines = [
+        header,
+        f"Score: {h['score10']}/10",
+        f"Precio: ${h['price']:.2f} | "
+        f"Bear ${h['bear']:.2f} / Base ${h['base']:.2f} / Bull ${h['bull']:.2f} (12 meses)",
+        f"Evidencia: {h['evidence_points']}/100",
+    ]
+    if fv is None:
+        pass
+    elif fv["available"]:
         lines.append(
-            f"\n{h['ticker']} — {h['score10']}/10\n"
-            f"Precio: ${h['price']:.2f} | "
-            f"Bear ${h['bear']:.2f} / Base ${h['base']:.2f} / Bull ${h['bull']:.2f} (12 meses)\n"
-            f"Evidencia: {h['evidence_points']}/100"
+            f"Precio justo HOY (DCF): ${fv['fair_value']:.2f} "
+            f"({fv['margin_of_safety_pct']:+.1%} vs precio actual) — {fv['verdict']}"
         )
-        fv = h.get("fair_value")
-        if fv is None:
-            pass
-        elif fv["available"]:
-            lines.append(
-                f"Precio justo HOY (DCF): ${fv['fair_value']:.2f} "
-                f"({fv['margin_of_safety_pct']:+.1%} vs precio actual) — {fv['verdict']}"
-            )
-        else:
-            lines.append(f"Precio justo HOY (DCF): no calculable — {fv['reason']}")
-    lines.append("\nClasificación de research — no es recomendación de compra/venta.")
+    else:
+        lines.append(f"Precio justo HOY (DCF): no calculable — {fv['reason']}")
     return "\n".join(lines)
 
 
-def send_telegram(text: str) -> None:
+def _telegram_post(method: str, payload: dict) -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
-    chat_id = os.environ["TELEGRAM_CHAT_ID"]
-    payload = json.dumps({"chat_id": chat_id, "text": text}).encode()
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data=payload,
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=body,
         method="POST",
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=30) as r:
-        print(f"Telegram: {r.status} {r.read().decode()}")
+        print(f"Telegram {method}: {r.status} {r.read().decode()}")
+
+
+def send_telegram(text: str) -> None:
+    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+    _telegram_post("sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+
+
+def send_telegram_hit(h: dict) -> None:
+    """One elegant message per ticker — its logo as the photo when FMP has
+    one, plain text otherwise. Never fabricates a logo URL."""
+    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+    caption = build_hit_caption(h)
+    logo_url = (h.get("fair_value") or {}).get("logo_url")
+    if logo_url:
+        try:
+            _telegram_post(
+                "sendPhoto",
+                {"chat_id": chat_id, "photo": logo_url, "caption": caption, "parse_mode": "Markdown"},
+            )
+            return
+        except urllib.error.URLError as e:
+            print(f"WARN: sendPhoto falló para {h['ticker']} ({e}), mando texto.", file=sys.stderr)
+    send_telegram(caption)
 
 
 def main() -> int:
@@ -170,17 +203,22 @@ def main() -> int:
     for h in hits:
         h["fair_value"] = fair_value_now(h["ticker"])
 
-    text = build_message(hits)
-    if text is None:
+    intro = build_intro(hits)
+    if intro is None:
         print("Ningún ticker cruzó el umbral de 8/10 hoy — no se manda nada.")
         return 0
 
     if os.environ.get("DRY_RUN") == "1":
-        print(f"[DRY RUN]\n{text}")
+        print(f"[DRY RUN]\n{intro}")
+        for h in hits:
+            fv = h.get("fair_value") or {}
+            print(f"[DRY RUN] logo={fv.get('logo_url')}\n{build_hit_caption(h)}")
         return 0
 
     try:
-        send_telegram(text)
+        send_telegram(intro)
+        for h in hits:
+            send_telegram_hit(h)
     except urllib.error.URLError as e:
         print(f"ERROR: no pude mandar a Telegram: {e}", file=sys.stderr)
         return 1

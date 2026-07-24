@@ -2,6 +2,7 @@
   {
     "symbol": "NVDA",
     "companyName": "NVIDIA Corporation",
+    "image": "https://images.financialmodelingprep.com/symbol/NVDA.png",
     "currency": "USD",
     "exchangeShortName": "NASDAQ",
     "sector": "Technology",

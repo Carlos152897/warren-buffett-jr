@@ -29,6 +29,8 @@ class Security(BaseModel):
     security_type: str
     reporting_currency: str
     valuation_currency: str
+    company_name: str | None = None
+    logo_url: str | None = None
 
 
 class AnalysisMeta(BaseModel):

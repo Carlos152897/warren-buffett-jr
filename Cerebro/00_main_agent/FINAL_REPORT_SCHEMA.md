@@ -4,6 +4,8 @@
 report_version: 2.0.0
 security:
   ticker: null
+  company_name: null
+  logo_url: null
   exchange: null
   currency: null
   analysis_timestamp: null

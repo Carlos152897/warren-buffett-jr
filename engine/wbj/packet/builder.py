@@ -474,6 +474,8 @@ def build_packet(ticker: str, providers: Providers, now: datetime) -> Packet:
         security_type="operating_company",
         reporting_currency=currency,
         valuation_currency=currency,
+        company_name=profile.get("companyName"),
+        logo_url=profile.get("image"),
     )
     analysis = AnalysisMeta(
         knowledge_timestamp=now.isoformat(),
