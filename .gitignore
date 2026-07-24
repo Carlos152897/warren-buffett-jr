@@ -10,6 +10,9 @@ API/
 # Archivos temporales
 *.tmp
 ~$*
+*.log
+__pycache__/
+*.pyc
 
 # Research outputs generados (regenerables) — no versionar
 Reportes/*
